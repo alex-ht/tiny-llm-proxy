@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Optional
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import StreamingResponse
 
 from .utils import generate_request_id
 
@@ -165,7 +166,28 @@ def create_app(config: Optional["Config"] = None) -> FastAPI:
                 headers={"X-Request-ID": req_id},
             )
 
-        # Streaming (or fallback): still dummy in this step
+        # Streaming path (Step 7): live passthrough of SSE chunks + accumulation
+        # for reconstruction (the actual log write happens in later steps).
+        if is_stream and config is not None:
+            from .streaming import event_stream
+
+            # send_body already has the rewritten model from above
+            send_body = (
+                dict(body) if isinstance(body, dict) else {"model": backend_model, "messages": []}
+            )
+            send_body["model"] = backend_model
+            # ensure stream flag
+            send_body["stream"] = True
+
+            # The event_stream yields the raw SSE lines (data: ... \n\n) with
+            # zero modification for lowest latency. Accumulation happens inside.
+            return StreamingResponse(
+                event_stream(provider, send_body, config),
+                media_type="text/event-stream",
+                headers={"X-Request-ID": req_id},
+            )
+
+        # Fallback dummy (should rarely be hit now)
         created = int(time.time())
         payload = {
             "id": f"chatcmpl-dummy-{req_id[-8:]}",
@@ -178,24 +200,17 @@ def create_app(config: Optional["Config"] = None) -> FastAPI:
                     "message": {
                         "role": "assistant",
                         "content": (
-                            "This is a (still dummy for stream) response from tiny-llm-proxy (Step 6). "
-                            "Non-stream calls are forwarded to real backends with proper auth. "
-                            "Streaming + reconstruction + message logging come later."
+                            "This is a fallback dummy response from tiny-llm-proxy (Step 7). "
                         ),
                     },
                     "finish_reason": "stop",
                 }
             ],
-            "usage": {
-                "prompt_tokens": 42,
-                "completion_tokens": 13,
-                "total_tokens": 55,
-            },
+            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
         }
 
-        # For dummy path, still log a completion (no real latency)
         logger.info(
-            "request completed (dummy): req_id=%s provider=%s client_model=%s",
+            "request completed (fallback dummy): req_id=%s provider=%s client_model=%s",
             req_id,
             provider,
             model,

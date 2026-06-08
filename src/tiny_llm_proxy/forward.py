@@ -35,6 +35,34 @@ def _get_client() -> httpx.AsyncClient:
     return _client
 
 
+def prepare_backend_headers(provider: dict, client_headers: dict | None = None) -> dict:
+    """Build outgoing headers for a backend according to the exact rules in DESIGN.md.
+
+    - Never forward client auth/*key headers.
+    - Only emit Authorization when the provider has a non-empty resolved api_key.
+    - Always include the provider's extra_headers (e.g. OpenRouter attribution).
+    """
+    headers: dict = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+
+    # 2. Only add Authorization when we have a non-empty resolved key
+    api_key = provider.get("api_key")
+    if api_key and str(api_key).strip():
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    # 3. Provider-specific extra headers
+    extra = provider.get("extra_headers") or {}
+    for k, v in extra.items():
+        headers[k] = str(v)
+
+    # (We intentionally do not copy safe headers from client_headers here for v1
+    #  to keep the rules strict and simple.)
+
+    return headers
+
+
 async def forward_request(
     provider_name: str,
     body: dict[str, Any],
@@ -56,34 +84,7 @@ async def forward_request(
     # Start with a copy of the (already routed) body
     send_body = dict(body)
 
-    # Build outgoing headers per the exact rules
-    headers: dict[str, str] = {
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-    }
-
-    # 1. Never forward client auth headers (security + to avoid surprising local servers)
-    #    (We don't copy any Authorization / api-key style from the incoming request here.)
-
-    # 2. Only add Authorization when we have a non-empty resolved key for *this* provider
-    api_key = provider.get("api_key")
-    if api_key and str(api_key).strip():
-        headers["Authorization"] = f"Bearer {api_key}"
-
-    # 3. Provider-specific extra headers (OpenRouter Referer etc. are safe and required)
-    extra = provider.get("extra_headers") or {}
-    for k, v in extra.items():
-        # Allow both "HTTP-Referer" and "http-referer" style in yaml
-        headers[k] = str(v)
-
-    # Caller-supplied (e.g. from the original request if we want to forward safe ones)
-    if extra_headers:
-        for k, v in extra_headers.items():
-            # We are conservative: only add if not already set and looks safe
-            if k.lower() not in {h.lower() for h in headers} and not any(
-                x in k.lower() for x in ("auth", "key", "token", "authorization")
-            ):
-                headers[k] = v
+    headers = prepare_backend_headers(provider, extra_headers)
 
     start = time.perf_counter()
     client = _get_client()
