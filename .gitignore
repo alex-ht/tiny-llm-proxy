@@ -216,3 +216,12 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# tiny-llm-proxy specific (per DESIGN.md)
+logs/
+*.log
+config.local.yaml
+config.local.yml
+config.local
+.env.local
+# uv.lock  # left to user preference for reproducibility (see DESIGN.md packaging)
