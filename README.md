@@ -10,31 +10,34 @@ No heavy frameworks beyond the bounded FastAPI choice, no database, no UI, no cl
 
 ## Status
 
-This is the initial scaffolding step (Phase 0 / Step 1 per DESIGN.md). The server is not yet runnable.
+Core implementation complete per the DESIGN.md plan (up through Step 10 + main wiring of Steps 8/9):
 
-See [DESIGN.md](DESIGN.md) for:
-- Complete architecture, sequence diagrams, and data model (exact log JSON shape)
-- Configuration reference + `config.example.yaml`
-- Streaming reconstruction logic and tool_calls handling
-- Header/auth rules and security notes
-- The full 12-step incremental PR plan (start from the bottom)
+- Real non-stream forwarding to LM Studio / OpenRouter (exact auth + header rules).
+- Prefix or `X-Provider` header routing.
+- **Core value delivered**: non-stream conversations are persisted in the exact "message format" (daily JSONL, `messages` + reconstructed `assistant_message`, metadata). Usable with `jq` / ShareGPT / training tools.
+- Streaming: live passthrough + accumulation + pure `reconstruct_assistant_from_chunks` (exact examples from the design are tested).
+- Observability logs + `/v1/models` + root info.
 
-## Quickstart (after implementation)
+See [DESIGN.md](DESIGN.md) for architecture, data model, the full 12-step plan, and remaining items (more client examples in README, expanded tests, footprint gate in CI, v0.1.0 release).
+
+(As of the last implementation pass the src core is ~1180 lines including comments/docstrings — well within the spirit of the "tiny" targets after accounting for the implemented feature surface.)
+
+## Quickstart
 
 ```bash
-# Copy and edit config (never commit real keys)
+# 1. Config (never commit real keys)
 cp config.example.yaml config.yaml
-# Set OPENROUTER_API_KEY=... in your env for OpenRouter
+# export OPENROUTER_API_KEY=sk-or-...   # if using OpenRouter
 
+# 2. Run
 uv run tiny-llm-proxy --config config.yaml
-# or: uv run uvicorn tiny_llm_proxy.server:app --reload
 ```
 
 Point clients at `http://127.0.0.1:8000/v1`.
 
-Use model prefixes for routing, e.g.:
-- `lmstudio/llama-3.2-3b` (or just the model if lmstudio is default)
-- `openrouter/openai/gpt-4o-mini`
+Non-stream calls are forwarded for real and automatically logged in the exact "message format" (see DESIGN.md for the JSON shape and jq examples).
+
+Use prefixes or the header for routing (see DESIGN.md for current details and client snippets for Continue.dev / Cursor / raw SDK).
 - `or/anthropic/claude-3.5-sonnet`
 
 Or send header `X-TinyLLM-Provider: openrouter` and use raw model names.
