@@ -1,15 +1,17 @@
 """FastAPI application and endpoint definitions.
 
-Step 2 (Phase 0): minimal runnable server with:
-- GET /health and /v1/health (returns stub providers)
-- POST /v1/chat/completions (non-streaming dummy response only)
+Step 3 (Phase 1): the server is now config-aware.
+- create_app(config=...) builds an app using a loaded Config (providers, host/port, log_level etc.)
+- GET /health and /v1/health now report the real configured provider names
+- POST /v1/chat/completions still returns a dummy (non-stream) for this phase
 
-Real routing, config, forwarding, streaming, and logging arrive in later steps.
-Request ID is threaded via middleware + header for observability.
+Full routing (Step 4), forwarding (Phase 2), streaming + logging (Phase 3) come later.
+Request ID middleware remains for observability.
 """
 
 import contextlib
 import time
+from typing import TYPE_CHECKING, Optional
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -17,8 +19,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from .utils import generate_request_id
 
-# Hardcoded for the dummy server (real values will come from config in Step 3+)
-DUMMY_PROVIDERS = ["lmstudio"]
+if TYPE_CHECKING:
+    from .config import Config  # for type hints only (avoids circular at runtime)
 
 
 class RequestIDMiddleware(BaseHTTPMiddleware):
@@ -32,80 +34,101 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
         return response
 
 
-app = FastAPI(
-    title="tiny-llm-proxy",
-    version="0.1.0",
-    description="Tiny OpenAI-compatible proxy (step 2 dummy server)",
-)
+def create_app(config: Optional["Config"] = None) -> FastAPI:
+    """Application factory.
 
-
-app.add_middleware(RequestIDMiddleware)
-
-
-@app.get("/health")
-@app.get("/v1/health")
-async def health(request: Request) -> dict:
-    """Simple health check. Includes the providers that would be loaded (stub for now)."""
-    # In later steps this will reflect the real configured providers.
-    return {
-        "status": "ok",
-        "providers": DUMMY_PROVIDERS,
-        "request_id": getattr(request.state, "request_id", None),
-    }
-
-
-@app.post("/v1/chat/completions")
-async def chat_completions(request: Request) -> JSONResponse:
-    """Dummy non-streaming chat completion endpoint.
-
-    Accepts any OpenAI-shaped body (for now we ignore it).
-    Always returns a valid OpenAI chat.completion JSON.
-
-    Streaming support, real model forwarding, reconstruction, and logging
-    are implemented in Phase 2/3.
+    If config is None, load_config() is called (respects TINYLLM_CONFIG env
+    and the normal search order including config.example.yaml).
+    The returned app has app.state.config populated for later use by
+    routing/forwarding/logging.
     """
-    req_id = getattr(request.state, "request_id", generate_request_id())
+    if config is None:
+        from .config import load_config
 
-    # Consume the body so clients don't hang, but don't validate/parse yet.
-    with contextlib.suppress(Exception):
-        await request.json()  # dummy mode — be lenient
+        config = load_config()
 
-    created = int(time.time())
-
-    # A minimal but valid OpenAI response shape.
-    payload = {
-        "id": f"chatcmpl-dummy-{req_id[-8:]}",
-        "object": "chat.completion",
-        "created": created,
-        "model": "tiny-llm-proxy-dummy",
-        "choices": [
-            {
-                "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": (
-                        "This is a dummy response from tiny-llm-proxy (Phase 0 Step 2). "
-                        "Real forwarding + streaming reconstruction + message logging "
-                        "will be added in subsequent steps."
-                    ),
-                },
-                "finish_reason": "stop",
-            }
-        ],
-        "usage": {
-            "prompt_tokens": 42,
-            "completion_tokens": 13,
-            "total_tokens": 55,
-        },
-    }
-
-    return JSONResponse(
-        content=payload,
-        headers={"X-Request-ID": req_id},
+    app = FastAPI(
+        title="tiny-llm-proxy",
+        version="0.1.0",
+        description=(
+            "Tiny OpenAI-compatible proxy with local message-format logging "
+            f"(config: {config.config_path or 'defaults'})"
+        ),
     )
+    app.state.config = config
+    app.add_middleware(RequestIDMiddleware)
+
+    provider_names = list(config.providers.keys())
+
+    @app.get("/health")
+    @app.get("/v1/health")
+    async def health(request: Request) -> dict:
+        """Health check. Reports the providers that are actually configured."""
+        return {
+            "status": "ok",
+            "providers": provider_names,
+            "request_id": getattr(request.state, "request_id", None),
+        }
+
+    @app.post("/v1/chat/completions")
+    async def chat_completions(request: Request) -> JSONResponse:
+        """Dummy non-streaming chat completion endpoint (Phase 1).
+
+        Real routing, provider forwarding, streaming reconstruction and
+        persistent logging are added in later phases.
+        """
+        req_id = getattr(request.state, "request_id", generate_request_id())
+
+        # Drain body leniently (clients sending large payloads / tools / vision
+        # should not hang in the dummy phase).
+        with contextlib.suppress(Exception):
+            await request.json()
+
+        created = int(time.time())
+
+        payload = {
+            "id": f"chatcmpl-dummy-{req_id[-8:]}",
+            "object": "chat.completion",
+            "created": created,
+            "model": "tiny-llm-proxy-dummy",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": (
+                            "This is a dummy response from tiny-llm-proxy (Phase 1 / Step 3). "
+                            "Real forwarding + streaming + message logging will be added "
+                            "in subsequent steps."
+                        ),
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 42,
+                "completion_tokens": 13,
+                "total_tokens": 55,
+            },
+        }
+
+        return JSONResponse(
+            content=payload,
+            headers={"X-Request-ID": req_id},
+        )
+
+    return app
 
 
-# Convenience for `uvicorn tiny_llm_proxy.server:app`
+# Module-level app for:
+# - `uvicorn tiny_llm_proxy.server:app` (no factory)
+# - direct TestClient(app) usage in some tests
+# - `python -m tiny_llm_proxy.server`
+# It loads via the normal load_config() rules (usually the shipped example).
+app = create_app()
+
+
+# Convenience for `python -m tiny_llm_proxy.server` (uses the module-level app)
 if __name__ == "__main__":
     import uvicorn
 

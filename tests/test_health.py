@@ -1,24 +1,29 @@
-"""Tests for the Step 2 dummy server (health + basic chat completions).
+"""Tests for the config-aware dummy server (Phase 1 / Step 3).
 
-These run against the in-memory FastAPI app using TestClient so that CI
-exercises the actual endpoints introduced in Phase 0 Step 2 without needing
-a live uvicorn process or external backends.
+Health now reports providers loaded from config (usually via config.example.yaml).
+The chat endpoint remains a non-streaming dummy until Phase 2/3.
 """
 
 from fastapi.testclient import TestClient
 
-from tiny_llm_proxy.server import DUMMY_PROVIDERS, app
+from tiny_llm_proxy.config import load_config
+from tiny_llm_proxy.server import create_app
 
-client = TestClient(app)
+# Load once using the normal rules (will find config.example.yaml in the repo root).
+# Using create_app() makes the tests exercise the new factory + Config path.
+_test_cfg = load_config()
+client = TestClient(create_app(_test_cfg))
 
 
 def test_health_endpoint():
-    """GET /health returns the expected stub shape."""
+    """GET /health returns providers from the loaded Config (Step 3)."""
     resp = client.get("/health")
     assert resp.status_code == 200
     data = resp.json()
     assert data["status"] == "ok"
-    assert data["providers"] == DUMMY_PROVIDERS
+    # We loaded via config.example.yaml (or defaults), so both known providers must appear.
+    assert "lmstudio" in data["providers"]
+    assert "openrouter" in data["providers"]
     assert "request_id" in data
     assert resp.headers.get("x-request-id")  # middleware always adds it
 
