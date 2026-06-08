@@ -9,7 +9,6 @@ Full routing (Step 4), forwarding (Phase 2), streaming + logging (Phase 3) come 
 Request ID middleware remains for observability.
 """
 
-import contextlib
 import time
 from typing import TYPE_CHECKING, Optional
 
@@ -74,15 +73,45 @@ def create_app(config: Optional["Config"] = None) -> FastAPI:
     async def chat_completions(request: Request) -> JSONResponse:
         """Dummy non-streaming chat completion endpoint (Phase 1).
 
-        Real routing, provider forwarding, streaming reconstruction and
-        persistent logging are added in later phases.
+        Routing (prefix + header) is now active and logged.
+        Real provider forwarding, streaming reconstruction and persistent
+        message logging are added in Phase 2/3.
         """
         req_id = getattr(request.state, "request_id", generate_request_id())
 
-        # Drain body leniently (clients sending large payloads / tools / vision
-        # should not hang in the dummy phase).
-        with contextlib.suppress(Exception):
-            await request.json()
+        # Parse body once for routing decision (and to demonstrate the flow).
+        # We stay very lenient because full request validation comes later.
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+
+        model = body.get("model", "default-model") if isinstance(body, dict) else "default-model"
+
+        # Perform routing using the config that was attached by create_app()
+        config = getattr(request.app.state, "config", None)
+        if config is not None:
+            from .routing import route_request
+
+            provider, backend_model = route_request(model, dict(request.headers), config)
+            # Safe observability log (no keys, no secrets)
+            import logging
+
+            logging.getLogger(__name__).info(
+                "routing: client_model=%s -> provider=%s backend_model=%s (req_id=%s)",
+                model,
+                provider,
+                backend_model,
+                req_id,
+            )
+            # Reflect the routing in the dummy response model field for visibility
+            routed_model = (
+                f"{provider}/{backend_model}"
+                if provider != config.default_provider
+                else backend_model
+            )
+        else:
+            routed_model = model
 
         created = int(time.time())
 
@@ -90,14 +119,15 @@ def create_app(config: Optional["Config"] = None) -> FastAPI:
             "id": f"chatcmpl-dummy-{req_id[-8:]}",
             "object": "chat.completion",
             "created": created,
-            "model": "tiny-llm-proxy-dummy",
+            "model": routed_model,
             "choices": [
                 {
                     "index": 0,
                     "message": {
                         "role": "assistant",
                         "content": (
-                            "This is a dummy response from tiny-llm-proxy (Phase 1 / Step 3). "
+                            "This is a dummy response from tiny-llm-proxy (Phase 1 / Step 4). "
+                            "Routing is active (see server logs). "
                             "Real forwarding + streaming + message logging will be added "
                             "in subsequent steps."
                         ),
