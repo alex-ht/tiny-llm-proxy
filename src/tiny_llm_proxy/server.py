@@ -11,6 +11,7 @@ Request ID middleware remains for correlation.
 
 import logging
 import time
+from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
 from fastapi import FastAPI, Request
@@ -121,6 +122,8 @@ def create_app(config: Optional["Config"] = None) -> FastAPI:
         else:
             provider, backend_model, routed_model = "lmstudio", model, model
 
+        original_messages = body.get("messages", []) if isinstance(body, dict) else []
+        client_model = model
         is_stream = bool(body.get("stream")) if isinstance(body, dict) else False
 
         # Basic start log (struct-ish, per DESIGN.md observability)
@@ -128,7 +131,7 @@ def create_app(config: Optional["Config"] = None) -> FastAPI:
             "request started: req_id=%s provider=%s client_model=%s backend_model=%s stream=%s",
             req_id,
             provider,
-            model,
+            client_model,
             backend_model,
             is_stream,
         )
@@ -159,6 +162,44 @@ def create_app(config: Optional["Config"] = None) -> FastAPI:
                 usage.get("total_tokens"),
                 result.get("status_code"),
             )
+
+            # === Core value: persist the conversation (Step 8/9) ===
+            backend_json = resp_json
+            assistant = None
+            if isinstance(backend_json, dict):
+                ch = (backend_json.get("choices") or [{}])[0]
+                assistant = ch.get("message")
+            record = {
+                "request_id": req_id,
+                "id": backend_json.get("id") if isinstance(backend_json, dict) else None,
+                "timestamp": datetime.now().astimezone().isoformat(),
+                "duration_ms": duration,
+                "provider": provider,
+                "client_model": client_model,
+                "backend_model": backend_model,
+                "streamed": False,
+                "messages": original_messages,
+                "assistant_message": assistant
+                or {"role": "assistant", "content": None, "tool_calls": None, "refusal": None},
+                "finish_reason": (backend_json.get("choices") or [{}])[0].get("finish_reason")
+                if isinstance(backend_json, dict)
+                else None,
+                "usage": usage if usage else None,
+                "extra": {"headers_snapshot": {}},
+            }
+            try:
+                from .logging import log_interaction
+
+                log_interaction(
+                    record,
+                    log_dir=config.log_dir,
+                    log_raw=config.log_raw,
+                    raw_request=dict(body) if isinstance(body, dict) else None,
+                    raw_response=backend_json if isinstance(backend_json, dict) else None,
+                )
+            except Exception:
+                # Never let logging break the response to the client
+                logger.exception("message logging failed (non-fatal)")
 
             return JSONResponse(
                 content=result["json"],
