@@ -104,17 +104,35 @@ def create_app(config: Optional["Config"] = None) -> FastAPI:
                 backend_model,
                 req_id,
             )
-            # Reflect the routing in the dummy response model field for visibility
             routed_model = (
                 f"{provider}/{backend_model}"
                 if provider != config.default_provider
                 else backend_model
             )
         else:
-            routed_model = model
+            provider, backend_model, routed_model = "lmstudio", model, model
 
+        is_stream = bool(body.get("stream")) if isinstance(body, dict) else False
+
+        if not is_stream and config is not None:
+            # Real non-stream forwarding (Step 5)
+            send_body = (
+                dict(body) if isinstance(body, dict) else {"model": backend_model, "messages": []}
+            )
+            send_body["model"] = backend_model
+
+            from .forward import forward_request
+
+            result = await forward_request(provider, send_body, config=config)
+
+            return JSONResponse(
+                content=result["json"],
+                status_code=result.get("status_code", 200),
+                headers={"X-Request-ID": req_id},
+            )
+
+        # Streaming (or fallback): still dummy in this step
         created = int(time.time())
-
         payload = {
             "id": f"chatcmpl-dummy-{req_id[-8:]}",
             "object": "chat.completion",
@@ -126,10 +144,9 @@ def create_app(config: Optional["Config"] = None) -> FastAPI:
                     "message": {
                         "role": "assistant",
                         "content": (
-                            "This is a dummy response from tiny-llm-proxy (Phase 1 / Step 4). "
-                            "Routing is active (see server logs). "
-                            "Real forwarding + streaming + message logging will be added "
-                            "in subsequent steps."
+                            "This is a (still dummy for stream) response from tiny-llm-proxy (Step 5). "
+                            "Non-stream calls are now forwarded to real backends. "
+                            "Streaming + reconstruction + logging come later."
                         ),
                     },
                     "finish_reason": "stop",
