@@ -262,6 +262,70 @@ def create_app(config: Optional["Config"] = None) -> FastAPI:
             headers={"X-Request-ID": req_id},
         )
 
+    # --- Additional endpoints (Step 10 polish) ---
+
+    @app.get("/")
+    async def root(request: Request) -> dict:
+        cfg = getattr(request.app.state, "config", None)
+        return {
+            "name": "tiny-llm-proxy",
+            "version": "0.1.0",
+            "status": "ok",
+            "docs": "/docs",
+            "health": "/health",
+            "models": "/v1/models",
+            "config": cfg.config_path if cfg else None,
+        }
+
+    @app.get("/v1/models")
+    async def list_models(request: Request) -> JSONResponse:
+        """Proxy GET /v1/models to the default (or configured) provider.
+
+        Many clients (Continue.dev, Open WebUI, etc.) call this on startup.
+        """
+        cfg = getattr(request.app.state, "config", None)
+        if cfg is None:
+            return JSONResponse(
+                content={"object": "list", "data": []},
+                status_code=200,
+                headers={"X-Request-ID": getattr(request.state, "request_id", "req_unknown")},
+            )
+
+        provider_name = cfg.default_provider
+        try:
+            provider = cfg.get_provider(provider_name)
+        except KeyError:
+            provider = next(iter(cfg.providers.values()))
+
+        base = provider["base_url"].rstrip("/")
+        url = f"{base}/v1/models"
+
+        from .forward import prepare_backend_headers
+
+        headers = prepare_backend_headers(provider)
+        headers.pop("Content-Type", None)
+        headers.pop("Accept", None)  # let backend decide, or set application/json
+
+        # Use a short-lived client for the models call (low frequency)
+        import httpx as _httpx
+
+        try:
+            async with _httpx.AsyncClient(timeout=30.0) as c:
+                r = await c.get(url, headers=headers)
+            return JSONResponse(
+                content=r.json()
+                if r.headers.get("content-type", "").startswith("application/json")
+                else {"data": []},
+                status_code=r.status_code,
+                headers={"X-Request-ID": getattr(request.state, "request_id", "req_unknown")},
+            )
+        except Exception as exc:
+            return JSONResponse(
+                content={"error": {"message": str(exc), "type": "proxy_error"}},
+                status_code=502,
+                headers={"X-Request-ID": getattr(request.state, "request_id", "req_unknown")},
+            )
+
     return app
 
 
