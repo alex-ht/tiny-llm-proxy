@@ -1,14 +1,15 @@
 """FastAPI application and endpoint definitions.
 
-Step 3 (Phase 1): the server is now config-aware.
-- create_app(config=...) builds an app using a loaded Config (providers, host/port, log_level etc.)
-- GET /health and /v1/health now report the real configured provider names
-- POST /v1/chat/completions still returns a dummy (non-stream) for this phase
+The server is config-aware (Step 3), has routing (Step 4), and real non-stream
+forwarding (Step 5). This step (6) adds end-to-end wiring for the non-stream
+path + basic console observability (struct-ish INFO logs for request start/complete
+with req_id, provider, model, duration, token counts).
 
-Full routing (Step 4), forwarding (Phase 2), streaming + logging (Phase 3) come later.
-Request ID middleware remains for observability.
+Streaming + message logging (the core value) come in Phase 3.
+Request ID middleware remains for correlation.
 """
 
+import logging
 import time
 from typing import TYPE_CHECKING, Optional
 
@@ -46,6 +47,10 @@ def create_app(config: Optional["Config"] = None) -> FastAPI:
 
         config = load_config()
 
+    # Respect config log_level for our application logs (uvicorn gets it separately in main)
+    log_level = getattr(logging, str(config.log_level).upper(), logging.INFO)
+    logging.getLogger("tiny_llm_proxy").setLevel(log_level)
+
     app = FastAPI(
         title="tiny-llm-proxy",
         version="0.1.0",
@@ -71,13 +76,18 @@ def create_app(config: Optional["Config"] = None) -> FastAPI:
 
     @app.post("/v1/chat/completions")
     async def chat_completions(request: Request) -> JSONResponse:
-        """Dummy non-streaming chat completion endpoint (Phase 1).
+        """Chat completions endpoint.
 
-        Routing (prefix + header) is now active and logged.
-        Real provider forwarding, streaming reconstruction and persistent
-        message logging are added in Phase 2/3.
+        Non-streaming path: routing (Step 4) + real forward to backend (Step 5)
+        with full header/auth rules.
+
+        This step (6) adds basic observability: INFO logs at request start and
+        completion (req_id, provider, models, latency, token counts when available).
+
+        Streaming is still stubbed (real streaming + reconstruction in Phase 3).
         """
         req_id = getattr(request.state, "request_id", generate_request_id())
+        logger = logging.getLogger(__name__)
 
         # Parse body once for routing decision (and to demonstrate the flow).
         # We stay very lenient because full request validation comes later.
@@ -95,9 +105,7 @@ def create_app(config: Optional["Config"] = None) -> FastAPI:
 
             provider, backend_model = route_request(model, dict(request.headers), config)
             # Safe observability log (no keys, no secrets)
-            import logging
-
-            logging.getLogger(__name__).info(
+            logger.info(
                 "routing: client_model=%s -> provider=%s backend_model=%s (req_id=%s)",
                 model,
                 provider,
@@ -114,6 +122,16 @@ def create_app(config: Optional["Config"] = None) -> FastAPI:
 
         is_stream = bool(body.get("stream")) if isinstance(body, dict) else False
 
+        # Basic start log (struct-ish, per DESIGN.md observability)
+        logger.info(
+            "request started: req_id=%s provider=%s client_model=%s backend_model=%s stream=%s",
+            req_id,
+            provider,
+            model,
+            backend_model,
+            is_stream,
+        )
+
         if not is_stream and config is not None:
             # Real non-stream forwarding (Step 5)
             send_body = (
@@ -124,6 +142,22 @@ def create_app(config: Optional["Config"] = None) -> FastAPI:
             from .forward import forward_request
 
             result = await forward_request(provider, send_body, config=config)
+
+            # Completion log with timing and tokens (if backend provided usage)
+            duration = result.get("duration_ms", 0.0)
+            resp_json = result.get("json", {}) if isinstance(result.get("json"), dict) else {}
+            usage = resp_json.get("usage", {}) if isinstance(resp_json, dict) else {}
+            logger.info(
+                "request completed: req_id=%s provider=%s latency_ms=%.1f "
+                "prompt_tokens=%s completion_tokens=%s total_tokens=%s status=%s",
+                req_id,
+                provider,
+                duration,
+                usage.get("prompt_tokens"),
+                usage.get("completion_tokens"),
+                usage.get("total_tokens"),
+                result.get("status_code"),
+            )
 
             return JSONResponse(
                 content=result["json"],
@@ -144,9 +178,9 @@ def create_app(config: Optional["Config"] = None) -> FastAPI:
                     "message": {
                         "role": "assistant",
                         "content": (
-                            "This is a (still dummy for stream) response from tiny-llm-proxy (Step 5). "
-                            "Non-stream calls are now forwarded to real backends. "
-                            "Streaming + reconstruction + logging come later."
+                            "This is a (still dummy for stream) response from tiny-llm-proxy (Step 6). "
+                            "Non-stream calls are forwarded to real backends with proper auth. "
+                            "Streaming + reconstruction + message logging come later."
                         ),
                     },
                     "finish_reason": "stop",
@@ -158,6 +192,14 @@ def create_app(config: Optional["Config"] = None) -> FastAPI:
                 "total_tokens": 55,
             },
         }
+
+        # For dummy path, still log a completion (no real latency)
+        logger.info(
+            "request completed (dummy): req_id=%s provider=%s client_model=%s",
+            req_id,
+            provider,
+            model,
+        )
 
         return JSONResponse(
             content=payload,
