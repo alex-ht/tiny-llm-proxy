@@ -29,41 +29,37 @@ You can also run directly without installing:
 uv run --with git+https://github.com/alex-ht/tiny-llm-proxy.git tiny-llm-proxy --config config.yaml
 ```
 
-## Quickstart (using the example remote llama.cpp + gemma-4-26b)
+## Quickstart
 
 ```bash
 # 1. Copy the example config (never commit real keys)
 cp config.example.yaml config.yaml
 
 # 2. (Optional) If your remote service requires an API key
-# export ALEXLLAMACPP_API_KEY=...
+# export LLAMACPP_API_KEY=...
 
-# 3. Install dependencies (this pulls in httpx etc.)
+# 3. Install dependencies
 uv sync --group dev   # or without --group dev for runtime only
 
-# 4. Run the proxy (ALWAYS use uv run so that httpx and other deps are available)
+# 4. Run the proxy
 uv run tiny-llm-proxy --config config.yaml
 # or with reload:
 uv run uvicorn tiny_llm_proxy.server:create_app --factory --reload
 ```
 
-**Important:** If you see "No module named 'httpx'" (or similar), it means you ran the proxy with a Python that doesn't have the project's dependencies. Always use `uv run ...` after `uv sync`. Do not use bare `python` or system uvicorn.
+Point your clients at `http://127.0.0.1:8000/v1` (or `https://...` if you enabled SSL below).
 
-Point your clients at `http://127.0.0.1:8000/v1` (or `https://...` if you enabled SSL).
-
-**Example model name** (this remote deployment):
-- `llamacpp/gemma-4-26b`
+Use model prefixes for routing (or the header below):
+- `llamacpp/your-model-name`
 
 Alternative header-based routing (takes precedence over prefix):
 ```
-X-TinyLLM-Provider: alexllamacpp
+X-TinyLLM-Provider: llamacpp
 ```
 
 Non-streaming requests are forwarded in real time and **automatically persisted** in the exact message format under `logs/`. 
 
-This setup uses the **live remote llama.cpp service** at the exact URL you provided, serving the `gemma-4-26b` model as the primary concrete example throughout the docs and `config.example.yaml`.
-
-**Verified usable**: A direct call to the backend using the exact model name the proxy forwards after stripping the prefix (`gemma-4-26b`) returns a valid OpenAI-compatible chat completion (200, usage stats, choices, etc.). The proxy will route `llamacpp/gemma-4-26b` → this backend correctly.
+By default only streaming interactions are logged (see `log_streams_only` in the config).
 
 ## HTTPS / SSL Support
 
@@ -113,7 +109,7 @@ Direct SSL in uvicorn is supported for convenience, but a reverse proxy is more 
 
 Copy `config.example.yaml` to `config.yaml` (or any path via `--config` / `TINYLLM_CONFIG`).
 
-Full current example (using the live remote llama.cpp service + gemma-4-26b as the concrete example):
+Full current example (sanitized for public repo):
 
 ```yaml
 # tiny-llm-proxy configuration
@@ -126,25 +122,25 @@ logging:
 
 log_dir: "./logs"
 log_raw: false
-log_streams_only: true     # default: 只記錄串流互動（同步訊息通常較不重要）
+log_streams_only: true     # default: only log streaming interactions (sync usually less important)
 
-default_provider: "alexllamacpp"   # 這個遠端 llama.cpp 服務（gemma-4-26b）
+default_provider: "llamacpp"
 
 providers:
-  alexllamacpp:
-    base_url: "https://afspod-services.dginfra.gov.tw/edb9267c-46f9-42f3-bb9a-dd0f1b5ebce6/alexllamacpp"
-    # api_key_env: "ALEXLLAMACPP_API_KEY"   # 若服務需要金鑰
-    # verify_ssl: false                     # 只有自簽憑證時才加
+  llamacpp:
+    base_url: "https://your-llamacpp-server.example.com"
+    # api_key_env: "LLAMACPP_API_KEY"   # if the service requires auth
+    # verify_ssl: false                 # only needed for self-signed / internal certs
 
-  # 其他併存後端範例（可選）
+  # Other co-existing backends (optional)
   lmstudio:
     base_url: "http://localhost:1234/v1"
     api_key: null
 
 routing:
   prefix_map:
-    "llamacpp/": "alexllamacpp"
-    "remote/": "alexllamacpp"
+    "llamacpp/": "llamacpp"
+    "remote/": "llamacpp"
     "lmstudio/": "lmstudio"
     "openrouter/": "openrouter"
 
@@ -170,14 +166,14 @@ client = OpenAI(
 )
 
 resp = client.chat.completions.create(
-    model="llamacpp/gemma-4-26b",   # ← 使用這個遠端範例模型
+    model="llamacpp/your-model-name",   # use your provider prefix + model
     messages=[{"role": "user", "content": "你好，請用一句話介紹自己。"}],
-    max_tokens=50
+    max_tokens: 50
 )
 print(resp.choices[0].message.content)
 ```
 
-TypeScript / other languages work the same (just change `baseURL`). The model name `llamacpp/gemma-4-26b` will be routed to the remote alexllamacpp backend (prefix stripped).
+TypeScript / other languages work the same (just change `baseURL`). Use the prefix you configured in `routing.prefix_map` (e.g. `llamacpp/your-model-name`).
 
 ### Continue.dev
 
@@ -264,7 +260,7 @@ The format is directly usable by many tools (ShareGPT converters, torchtune, Axo
 
 1. For a local llama.cpp server, start it with OpenAI-compatible endpoint (usually `http://localhost:8080/v1`).
 
-   For remote (like your afspod-services deployment), just use the full HTTPS URL as base_url.
+   For a remote server, use the full HTTPS URL as `base_url`.
 
 2. Add (or uncomment) the provider in your `config.yaml`:
 
@@ -275,11 +271,11 @@ providers:
   #   base_url: "http://localhost:8080/v1"
   #   api_key: "sk-no-key-required"
 
-  # Remote llama.cpp (HTTPS example)
-  alexllamacpp:
-    base_url: "https://afspod-services.dginfra.gov.tw/edb9267c-46f9-42f3-bb9a-dd0f1b5ebce6/alexllamacpp"
-    # api_key_env: "ALEXLLAMACPP_API_KEY"   # if the service requires auth
-    # verify_ssl: false                     # only needed for self-signed / internal certs
+  # Remote llama.cpp (HTTPS example - replace with your server)
+  llamacpp:
+    base_url: "https://your-llamacpp-server.example.com"
+    # api_key_env: "LLAMACPP_API_KEY"   # if the service requires auth
+    # verify_ssl: false                 # only needed for self-signed / internal certs
 ```
 
 3. Add to routing:
@@ -287,13 +283,13 @@ providers:
 ```yaml
 routing:
   prefix_map:
-    "llamacpp/": "alexllamacpp"
-    # or "remote/": "alexllamacpp"
+    "llamacpp/": "llamacpp"
+    # or "remote/": "llamacpp"
 ```
 
 4. Use `llamacpp/your-model-name` (or `remote/...`) in clients. The prefix is stripped before forwarding to the backend.
 
-If you get certificate errors when connecting to the remote backend, add `verify_ssl: false` under that provider (we added this option for exactly such cases).
+If you get certificate errors when connecting to a remote backend, add `verify_ssl: false` under that provider.
 
 ## Security & Privacy
 
@@ -315,20 +311,20 @@ Vision payloads (base64 images) can make log files large — monitor disk usage.
 ## Development
 
 ```bash
-# Install everything (including httpx for the proxy itself)
+# Install everything
 uv sync --group dev
 
 uv run ruff check .
 uv run ruff format --check .
 uv run pytest
 
-# Run the proxy (this ensures httpx is in the environment)
+# Run the proxy
 uv run tiny-llm-proxy --config config.example.yaml
 # or
 uv run uvicorn tiny_llm_proxy.server:create_app --factory --reload
 ```
 
-**Never run with bare `python` or `uvicorn` from outside the uv environment**, or you will get "No module named 'httpx'" etc.
+Always run commands via `uv run` (or activate the environment created by `uv sync`) so that all dependencies are available.
 
 The project aims to stay tiny and understandable in < 30 minutes for a new reader.
 
