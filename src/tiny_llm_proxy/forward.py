@@ -89,8 +89,11 @@ async def forward_request(
     start = time.perf_counter()
     client = _get_client()
 
+    # Respect per-provider SSL verification setting (useful for local/self-signed backends)
+    verify_ssl = provider.get("verify_ssl", True)
+
     try:
-        resp = await client.post(target_url, json=send_body, headers=headers)
+        resp = await client.post(target_url, json=send_body, headers=headers, verify=verify_ssl)
         duration_ms = (time.perf_counter() - start) * 1000.0
         # Try to return JSON body even on error status (OpenAI errors are JSON)
         try:

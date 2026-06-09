@@ -83,6 +83,7 @@ openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365 -node
 **Notes / Warnings**:
 - Self-signed certs will cause most clients (VS Code, browsers, some SDKs) to reject the connection by default. You will need to tell the client to accept insecure connections or import the cert into the system trust store.
 - For a better experience on your machine, use [mkcert](https://github.com/FiloSottile/mkcert) — it generates locally-trusted certs.
+- The `verify_ssl` option under a provider (default: true) controls whether the *proxy* verifies the backend's certificate when connecting to it. Set `verify_ssl: false` under `lmstudio` (or any provider) only if that backend is using HTTPS with a self-signed cert.
 - **Recommended for most people**: Put a reverse proxy in front (Caddy is the easiest):
 
   Simple `Caddyfile`:

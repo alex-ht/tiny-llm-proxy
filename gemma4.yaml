@@ -4,7 +4,9 @@
 
 server:
   host: "127.0.0.1"
-  port: 8000
+  port: 8443
+  ssl_certfile: cert.pem
+  ssl_keyfile: key.pem
 
 logging:
   level: "info"            # controls stdlib logging + uvicorn where possible; also exposed as top-level for backward compat in loader

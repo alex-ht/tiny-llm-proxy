@@ -67,7 +67,9 @@ def main(argv: list[str] | None = None) -> None:
 
     print(f"OpenAPI docs: {scheme}://{display_host}:{port}/docs")
     if use_https:
-        print("HTTPS enabled (self-signed or custom cert). Clients may need to trust the certificate.")
+        print(
+            "HTTPS enabled (self-signed or custom cert). Clients may need to trust the certificate."
+        )
     print("Press Ctrl+C to stop.\n")
 
     # Use factory so create_app() inside the worker calls load_config()

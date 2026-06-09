@@ -26,6 +26,7 @@ providers:
   lmstudio:
     base_url: "http://localhost:1234/v1"
     api_key: null          # or "" ; LM Studio usually accepts anything or nothing. No Authorization header will be sent.
+    # verify_ssl: false    # Set to false only if you configure LM Studio (or another backend) to use HTTPS with a self-signed certificate.
     # extra_headers: {}
 
   openrouter:

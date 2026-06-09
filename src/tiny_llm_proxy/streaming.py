@@ -137,6 +137,7 @@ async def event_stream(
     send_body["model"] = body.get("model")  # already rewritten by caller usually
 
     headers = prepare_backend_headers(provider)
+    verify_ssl = provider.get("verify_ssl", True)
 
     # We accumulate here; the caller will reconstruct after the response is sent.
     # (We don't store inside the generator to keep it simple.)
@@ -146,7 +147,7 @@ async def event_stream(
     chunks: list[dict] = []
 
     try:
-        async with client.stream("POST", target_url, json=send_body, headers=headers) as resp:
+        async with client.stream("POST", target_url, json=send_body, headers=headers, verify=verify_ssl) as resp:
             if resp.status_code != 200:
                 # Forward error as a single event (best effort)
                 text = await resp.aread()
