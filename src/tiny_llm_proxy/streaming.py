@@ -15,6 +15,8 @@ import json
 from collections.abc import AsyncGenerator
 from typing import Any
 
+import httpx
+
 from .config import Config
 from .forward import _get_client, prepare_backend_headers
 
@@ -116,6 +118,9 @@ async def event_stream(
     provider_name: str,
     body: dict[str, Any],
     config: Config,
+    *,
+    chunks: list[dict] | None = None,
+    on_done: "Callable[[], None] | None" = None,
 ) -> AsyncGenerator[str, None]:
     """Async generator that does live SSE passthrough to the client while
     accumulating chunks for later reconstruction.
@@ -123,10 +128,14 @@ async def event_stream(
     Yields raw "data: {...}\n\n" (or [DONE]) lines with zero modification to the
     wire format where possible. This gives the client the lowest possible latency.
 
-    After the stream ends (or on error / client disconnect), the accumulated
-    chunks can be used with reconstruct_assistant_from_chunks (called by caller
-    after the generator is exhausted).
+    Pass `chunks` list to receive the parsed chunks (for reconstruction after).
+    Pass `on_done` callback (zero-arg) that will be invoked after the client
+    has fully received the stream (after [DONE] or error). This is the place
+    to do post-stream work like reconstruction + logging the final record
+    in the same format as non-stream requests.
     """
+    from collections.abc import Callable
+
     provider = config.get_provider(provider_name)
     base_url = provider["base_url"].rstrip("/")
     target_url = f"{base_url}/v1/chat/completions"
@@ -139,15 +148,23 @@ async def event_stream(
     headers = prepare_backend_headers(provider)
     verify_ssl = provider.get("verify_ssl", True)
 
-    # We accumulate here; the caller will reconstruct after the response is sent.
-    # (We don't store inside the generator to keep it simple.)
-
-    client = _get_client()
-
-    chunks: list[dict] = []
+    # Use caller's chunks list if provided, else local (for backward compat)
+    if chunks is None:
+        chunks = []
+    stream_client = None
+    close_client = False
 
     try:
-        async with client.stream("POST", target_url, json=send_body, headers=headers, verify=verify_ssl) as resp:
+        if verify_ssl is True or verify_ssl is None:
+            stream_client = _get_client()
+            close_client = False
+        else:
+            stream_client = httpx.AsyncClient(verify=verify_ssl, timeout=300.0)
+            close_client = True
+
+        async with stream_client.stream(
+            "POST", target_url, json=send_body, headers=headers
+        ) as resp:
             if resp.status_code != 200:
                 # Forward error as a single event (best effort)
                 text = await resp.aread()
@@ -159,6 +176,8 @@ async def event_stream(
                     }
                 yield f"data: {json.dumps(err)}\n\n"
                 yield "data: [DONE]\n\n"
+                if on_done:
+                    on_done()
                 return
 
             async for line in resp.aiter_lines():
@@ -190,7 +209,17 @@ async def event_stream(
         err = {"error": {"message": str(exc), "type": "proxy_stream_error"}}
         yield f"data: {json.dumps(err)}\n\n"
         yield "data: [DONE]\n\n"
+        if on_done:
+            on_done()
         return
+
+    finally:
+        if close_client and stream_client is not None:
+            await stream_client.aclose()
+
+    # success path: after the stream has been fully consumed by the client
+    if on_done:
+        on_done()
 
     # The generator is exhausted. The caller (in server.py) is responsible for
     # calling reconstruct_assistant_from_chunks(chunks) after the StreamingResponse

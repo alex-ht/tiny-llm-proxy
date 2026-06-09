@@ -187,19 +187,20 @@ def create_app(config: Optional["Config"] = None) -> FastAPI:
                 "usage": usage if usage else None,
                 "extra": {"headers_snapshot": {}},
             }
-            try:
-                from .logging import log_interaction
+            if not config.log_streams_only:
+                try:
+                    from .logging import log_interaction
 
-                log_interaction(
-                    record,
-                    log_dir=config.log_dir,
-                    log_raw=config.log_raw,
-                    raw_request=dict(body) if isinstance(body, dict) else None,
-                    raw_response=backend_json if isinstance(backend_json, dict) else None,
-                )
-            except Exception:
-                # Never let logging break the response to the client
-                logger.exception("message logging failed (non-fatal)")
+                    log_interaction(
+                        record,
+                        log_dir=config.log_dir,
+                        log_raw=config.log_raw,
+                        raw_request=dict(body) if isinstance(body, dict) else None,
+                        raw_response=backend_json if isinstance(backend_json, dict) else None,
+                    )
+                except Exception:
+                    # Never let logging break the response to the client
+                    logger.exception("message logging failed (non-fatal)")
 
             return JSONResponse(
                 content=result["json"],
@@ -208,7 +209,9 @@ def create_app(config: Optional["Config"] = None) -> FastAPI:
             )
 
         # Streaming path (Step 7): live passthrough of SSE chunks + accumulation
-        # for reconstruction (the actual log write happens in later steps).
+        # for reconstruction. We now log the final reconstructed record in the
+        # same format as non-stream (using on_done callback after client receives
+        # all chunks).
         if is_stream and config is not None:
             from .streaming import event_stream
 
@@ -220,10 +223,71 @@ def create_app(config: Optional["Config"] = None) -> FastAPI:
             # ensure stream flag
             send_body["stream"] = True
 
+            chunks: list[dict] = []
+            start_time = time.time()
+
+            def on_stream_done():
+                """Called after the client has received the full stream (incl. [DONE]).
+                Build and log the record using the accumulated chunks + reconstruct.
+                """
+                end_time = time.time()
+                duration = (end_time - start_time) * 1000.0
+                if not chunks:
+                    return
+                try:
+                    from .streaming import reconstruct_assistant_from_chunks
+                    from .logging import log_interaction
+
+                    assistant = reconstruct_assistant_from_chunks(chunks)
+
+                    # Extract metadata from chunks (id, finish_reason, usage often in last chunks)
+                    backend_id = None
+                    finish_reason = None
+                    usage = None
+                    for c in reversed(chunks):
+                        if isinstance(c, dict):
+                            if not backend_id and c.get("id"):
+                                backend_id = c.get("id")
+                            if "choices" in c and c.get("choices"):
+                                ch0 = c["choices"][0] if c["choices"] else {}
+                                if ch0.get("finish_reason"):
+                                    finish_reason = ch0.get("finish_reason")
+                            if c.get("usage"):
+                                usage = c.get("usage")
+                            if backend_id and finish_reason and usage:
+                                break
+
+                    record = {
+                        "request_id": req_id,
+                        "id": backend_id,
+                        "timestamp": datetime.now().astimezone().isoformat(),
+                        "duration_ms": duration,
+                        "provider": provider,
+                        "client_model": client_model,
+                        "backend_model": backend_model,
+                        "streamed": True,
+                        "messages": original_messages,
+                        "assistant_message": assistant
+                        or {"role": "assistant", "content": None, "tool_calls": None, "refusal": None},
+                        "finish_reason": finish_reason,
+                        "usage": usage,
+                        "extra": {"headers_snapshot": {}},
+                    }
+                    log_interaction(
+                        record,
+                        log_dir=config.log_dir,
+                        log_raw=config.log_raw,
+                        raw_request=send_body,
+                        raw_response=None,  # streaming raw is the chunks; main info is in the record
+                    )
+                except Exception:
+                    # Never let logging break anything
+                    logger.exception("message logging failed (non-fatal) for stream")
+
             # The event_stream yields the raw SSE lines (data: ... \n\n) with
-            # zero modification for lowest latency. Accumulation happens inside.
+            # zero modification for lowest latency. Accumulation + on_done for logging.
             return StreamingResponse(
-                event_stream(provider, send_body, config),
+                event_stream(provider, send_body, config, chunks=chunks, on_done=on_stream_done),
                 media_type="text/event-stream",
                 headers={"X-Request-ID": req_id},
             )
@@ -306,11 +370,13 @@ def create_app(config: Optional["Config"] = None) -> FastAPI:
         headers.pop("Content-Type", None)
         headers.pop("Accept", None)  # let backend decide, or set application/json
 
+        verify_ssl = provider.get("verify_ssl", True)
+
         # Use a short-lived client for the models call (low frequency)
         import httpx as _httpx
 
         try:
-            async with _httpx.AsyncClient(timeout=30.0) as c:
+            async with _httpx.AsyncClient(timeout=30.0, verify=verify_ssl) as c:
                 r = await c.get(url, headers=headers)
             return JSONResponse(
                 content=r.json()

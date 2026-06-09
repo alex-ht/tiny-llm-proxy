@@ -12,8 +12,12 @@ specified in DESIGN.md (Data Model section).
   atomic enough for this workload).
 
 The actual building of the normalized record (messages + reconstructed
-assistant_message + metadata) and the call to this module happen in Step 9
-(after we have reconstruction from streaming or the non-stream response).
+assistant_message + metadata) and the call to this module happen after
+forwarding/reconstruction.
+
+By default (log_streams_only: true in config), only streaming interactions
+are persisted (sync ones are usually less valuable for review/training datasets).
+Non-stream logging can be enabled by setting log_streams_only: false.
 """
 
 import json

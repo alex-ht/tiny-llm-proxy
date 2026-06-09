@@ -30,6 +30,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "logging": {"level": "info"},
     "log_dir": "./logs",
     "log_raw": False,
+    "log_streams_only": True,  # default: only persist streaming interactions to the main JSONL (sync messages are usually less important)
     "default_provider": "lmstudio",
     "providers": {
         "lmstudio": {
@@ -104,6 +105,7 @@ class Config:
     logging: dict[str, Any]
     log_dir: str
     log_raw: bool
+    log_streams_only: bool = True
     default_provider: str
     providers: dict[str, dict[str, Any]] = field(default_factory=dict)
     routing: dict[str, Any] = field(default_factory=dict)
@@ -202,6 +204,7 @@ def load_config(config_path: str | None = None) -> Config:
         logging=logging_section,
         log_dir=str(expanded.get("log_dir", "./logs")),
         log_raw=bool(expanded.get("log_raw", False)),
+        log_streams_only=bool(expanded.get("log_streams_only", True)),
         default_provider=str(expanded.get("default_provider", "lmstudio")),
         providers=resolved_providers,
         routing=dict(expanded.get("routing", DEFAULT_CONFIG["routing"])),

@@ -19,8 +19,9 @@ logging:
 
 log_dir: "./logs"          # or "~/.local/share/tiny-llm-proxy/logs"
 log_raw: false             # write full request/response bodies (redacted) for debug. Useful for deep debugging of tool calls / vision.
+log_streams_only: true     # default true: only persist *streaming* interactions to the main JSONL (sync messages are usually less important for review/training)
 
-default_provider: "lmstudio"
+default_provider: "alexllamacpp"  # 使用遠端 llama.cpp 服務作為範例（gemma-4-26b 模型）
 
 providers:
   lmstudio:
@@ -37,10 +38,20 @@ providers:
       HTTP-Referer: "https://github.com/alex-ht/tiny-llm-proxy"
       X-OpenRouter-Title: "tiny-llm-proxy"
 
-  # Example for future llama.cpp (uncomment + configure as needed)
+  # Remote llama.cpp (your deployment at afspod-services)
+  alexllamacpp:
+    base_url: "https://afspod-services.dginfra.gov.tw/edb9267c-46f9-42f3-bb9a-dd0f1b5ebce6/alexllamacpp"
+    # If the service requires an API key, either put it here (not recommended for git)
+    # or better use environment variable:
+    # api_key_env: "ALEXLLAMACPP_API_KEY"
+    # 針對這個遠端服務（gov.tw 內部憑證），必須設 false，否則 /v1/models 和聊天都會出現
+    # [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: Missing Subject Key Identifier
+    verify_ssl: false
+
+  # Local llama.cpp example (uncomment if you run one locally)
   # llamacpp:
   #   base_url: "http://localhost:8080/v1"
-  #   api_key: "sk-no-key-required"   # or null depending on your llama.cpp server
+  #   api_key: "sk-no-key-required"
   #   api_key_env: "LLAMACPP_API_KEY"   # optional
 
 routing:
@@ -49,11 +60,15 @@ routing:
     "lmstudio/": "lmstudio"
     "openrouter/": "openrouter"
     "or/": "openrouter"
-    "llamacpp/": "llamacpp"
+    "llamacpp/": "alexllamacpp"   # or "remote/" if you prefer
     "local/": "lmstudio"   # convenience
+    # "alexllamacpp/": "alexllamacpp"  # explicit prefix if you want
 
   # Also accept these request headers (case-insensitive match in code). Header routing takes precedence over prefix.
   header_names: ["X-TinyLLM-Provider", "X-Provider", "X-LLM-Provider"]
 
   # If no routing info (no matching prefix and no header), fall back to default_provider.
+
+# 範例：把遠端 llama.cpp 設為主要後端
+# default_provider: "alexllamacpp"
 
