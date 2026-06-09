@@ -106,7 +106,7 @@ class Config:
     log_dir: str
     log_raw: bool
     log_streams_only: bool = True
-    default_provider: str
+    default_provider: str = "lmstudio" = "lmstudio"
     providers: dict[str, dict[str, Any]] = field(default_factory=dict)
     routing: dict[str, Any] = field(default_factory=dict)
     _config_path: str | None = None
