@@ -5,13 +5,6 @@
 server:
   host: "127.0.0.1"
   port: 8000
-  # HTTPS / SSL support (uvicorn)
-  # Generate a self-signed cert for local use:
-  #   openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365 -nodes -subj "/CN=localhost"
-  # Then set the paths below and point clients at https://127.0.0.1:8443/v1
-  # For production or trusted local certs, consider mkcert or a reverse proxy (Caddy/Nginx).
-  ssl_certfile: null
-  ssl_keyfile: null
 
 logging:
   level: "info"            # controls stdlib logging + uvicorn where possible; also exposed as top-level for backward compat in loader
@@ -24,8 +17,8 @@ default_provider: "lmstudio"
 
 providers:
   lmstudio:
-    base_url: "http://localhost:1234/v1"
-    api_key: null          # or "" ; LM Studio usually accepts anything or nothing. No Authorization header will be sent.
+    base_url: "https://afspod-services.dginfra.gov.tw/edb9267c-46f9-42f3-bb9a-dd0f1b5ebce6/alexllamacpp"
+    api_key: "SK_DUMMY"          # or "" ; LM Studio usually accepts anything or nothing. No Authorization header will be sent.
     # extra_headers: {}
 
   openrouter:
@@ -45,6 +38,7 @@ providers:
 routing:
   # Model prefix -> provider name. Prefixes are stripped before forwarding.
   prefix_map:
+    "alex/": "lmstudio"
     "lmstudio/": "lmstudio"
     "openrouter/": "openrouter"
     "or/": "openrouter"

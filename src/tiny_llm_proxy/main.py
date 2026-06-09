@@ -53,20 +53,38 @@ def main(argv: list[str] | None = None) -> None:
     print(f"log_dir: {cfg.log_dir}")
     print(f"default_provider: {cfg.default_provider}")
     print(f"log_level: {cfg.log_level}")
-    print("OpenAPI docs: http://127.0.0.1:8000/docs")
-    print("Press Ctrl+C to stop.\n")
 
-    host = cfg.server.get("host", "127.0.0.1")
-    port = int(cfg.server.get("port", 8000))
+    server_cfg = cfg.server or {}
+    host = server_cfg.get("host", "127.0.0.1")
+    port = int(server_cfg.get("port", 8000))
+    ssl_certfile = server_cfg.get("ssl_certfile")
+    ssl_keyfile = server_cfg.get("ssl_keyfile")
+
+    # Determine scheme for banner / docs link
+    use_https = bool(ssl_certfile and ssl_keyfile)
+    scheme = "https" if use_https else "http"
+    display_host = "127.0.0.1" if host in ("0.0.0.0", "::") else host
+
+    print(f"OpenAPI docs: {scheme}://{display_host}:{port}/docs")
+    if use_https:
+        print("HTTPS enabled (self-signed or custom cert). Clients may need to trust the certificate.")
+    print("Press Ctrl+C to stop.\n")
 
     # Use factory so create_app() inside the worker calls load_config()
     # again (picks up the env var we set above). This is reload-friendly.
+    uvicorn_kwargs = {
+        "host": host,
+        "port": port,
+        "log_level": cfg.log_level,
+    }
+    if use_https:
+        uvicorn_kwargs["ssl_certfile"] = ssl_certfile
+        uvicorn_kwargs["ssl_keyfile"] = ssl_keyfile
+
     uvicorn.run(
         "tiny_llm_proxy.server:create_app",
         factory=True,
-        host=host,
-        port=port,
-        log_level=cfg.log_level,
+        **uvicorn_kwargs,
     )
 
 

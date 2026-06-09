@@ -43,7 +43,7 @@ uv run tiny-llm-proxy --config config.yaml
 # or: uv run uvicorn tiny_llm_proxy.server:create_app --factory --reload
 ```
 
-Point your clients at `http://127.0.0.1:8000/v1`.
+Point your clients at `http://127.0.0.1:8000/v1` (or `https://...` if you enabled SSL below).
 
 Use model prefixes for routing (or the header below):
 - `lmstudio/llama-3.2-3b` (or just the raw model name if lmstudio is your default)
@@ -57,6 +57,45 @@ X-TinyLLM-Provider: openrouter
 ```
 
 Non-streaming requests are forwarded in real time and **automatically persisted** in the exact message format under `logs/`.
+
+## HTTPS / SSL Support
+
+If you need HTTPS (e.g. some clients or corporate policies require it):
+
+1. Add under the `server:` section in your `config.yaml`:
+
+```yaml
+server:
+  host: "127.0.0.1"
+  port: 8443                 # common HTTPS port for local dev
+  ssl_certfile: "cert.pem"
+  ssl_keyfile: "key.pem"
+```
+
+2. Generate a self-signed certificate (quick & dirty for localhost):
+
+```bash
+openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365 -nodes -subj "/CN=localhost"
+```
+
+3. Restart the proxy. The banner will show `https://127.0.0.1:8443/docs`.
+
+**Notes / Warnings**:
+- Self-signed certs will cause most clients (VS Code, browsers, some SDKs) to reject the connection by default. You will need to tell the client to accept insecure connections or import the cert into the system trust store.
+- For a better experience on your machine, use [mkcert](https://github.com/FiloSottile/mkcert) — it generates locally-trusted certs.
+- **Recommended for most people**: Put a reverse proxy in front (Caddy is the easiest):
+
+  Simple `Caddyfile`:
+  ```
+  :8443 {
+      reverse_proxy localhost:8000
+  }
+  ```
+  Caddy will automatically provide HTTPS (even with a real certificate if you use a public domain).
+
+  Then point clients at `https://127.0.0.1:8443/v1` and keep the proxy itself on plain HTTP on 8000.
+
+Direct SSL in uvicorn is supported for convenience, but a reverse proxy is more flexible and the usual way to do HTTPS in production setups.
 
 ## Configuration
 
