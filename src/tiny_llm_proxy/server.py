@@ -362,7 +362,9 @@ def create_app(config: Optional["Config"] = None) -> FastAPI:
             provider = next(iter(cfg.providers.values()))
 
         base = provider["base_url"].rstrip("/")
-        url = f"{base}/v1/models"
+        # base_url should be the OpenAI-compatible base (e.g. https://openrouter.ai/api/v1 )
+        # Append /models (not /v1/models)
+        url = f"{base}/models"
 
         from .forward import prepare_backend_headers
 

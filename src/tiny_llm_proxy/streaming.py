@@ -138,7 +138,9 @@ async def event_stream(
 
     provider = config.get_provider(provider_name)
     base_url = provider["base_url"].rstrip("/")
-    target_url = f"{base_url}/v1/chat/completions"
+    # base_url should be the OpenAI-compatible base (e.g. https://openrouter.ai/api/v1 or http://localhost:1234/v1)
+    # We append /chat/completions (not /v1/chat) to match standard OpenAI SDK behavior.
+    target_url = f"{base_url}/chat/completions"
 
     # Ensure stream is requested
     send_body = dict(body)
