@@ -1,0 +1,73 @@
+# tiny-llm-proxy configuration
+# Copy this file to config.yaml (or any path via --config / TINYLLM_CONFIG env var).
+# Authoritative top-level keys for v1 simplicity (server.* for bind only; no nested log_level).
+
+server:
+  host: "127.0.0.1"
+  port: 8000
+  # HTTPS / SSL support (uvicorn)
+  # Generate a self-signed cert for local use:
+  #   openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365 -nodes -subj "/CN=localhost"
+  # Then set the paths below and point clients at https://127.0.0.1:8443/v1
+  # For production or trusted local certs, consider mkcert or a reverse proxy (Caddy/Nginx).
+  ssl_certfile: null
+  ssl_keyfile: null
+
+logging:
+  level: "info"            # controls stdlib logging + uvicorn where possible; also exposed as top-level for backward compat in loader
+  # json: false
+
+log_dir: "./logs"          # or "~/.local/share/tiny-llm-proxy/logs"
+log_raw: false             # write full request/response bodies (redacted) for debug. Useful for deep debugging of tool calls / vision.
+log_streams_only: true     # default true: only persist *streaming* interactions to the main JSONL (sync messages are usually less important for review/training)
+
+default_provider: "llamacpp"  # 使用遠端 llama.cpp 服務作為範例
+
+providers:
+  lmstudio:
+    base_url: "http://localhost:1234/v1"
+    api_key: null          # or "" ; LM Studio usually accepts anything or nothing. No Authorization header will be sent.
+    # verify_ssl: false    # Set to false only if you configure LM Studio (or another backend) to use HTTPS with a self-signed certificate.
+    # extra_headers: {}
+
+  openrouter:
+    base_url: "https://openrouter.ai/api/v1"
+    # api_key: "sk-or-..."   # NEVER commit real keys to this file; use env below
+    api_key_env: "OPENROUTER_API_KEY"
+    extra_headers:
+      HTTP-Referer: "https://github.com/alex-ht/tiny-llm-proxy"
+      X-OpenRouter-Title: "tiny-llm-proxy"
+
+  # Remote llama.cpp (HTTPS example - replace with your own server)
+  llamacpp:
+    base_url: "https://your-llamacpp-server.example.com"
+    # If the service requires an API key, either put it here (not recommended for git)
+    # or better use environment variable:
+    # api_key_env: "LLAMACPP_API_KEY"
+    # For internal or self-signed certs on the remote server, you may need:
+    # verify_ssl: false
+
+  # Local llama.cpp example (uncomment if you run one locally)
+  # llamacpp:
+  #   base_url: "http://localhost:8080/v1"
+  #   api_key: "sk-no-key-required"
+  #   api_key_env: "LLAMACPP_API_KEY"   # optional
+
+routing:
+  # Model prefix -> provider name. Prefixes are stripped before forwarding.
+  prefix_map:
+    "lmstudio/": "lmstudio"
+    "openrouter/": "openrouter"
+    "or/": "openrouter"
+    "llamacpp/": "llamacpp"
+    "local/": "lmstudio"   # convenience
+    # "remote-llama/": "llamacpp"  # explicit prefix if you want
+
+  # Also accept these request headers (case-insensitive match in code). Header routing takes precedence over prefix.
+  header_names: ["X-TinyLLM-Provider", "X-Provider", "X-LLM-Provider"]
+
+  # If no routing info (no matching prefix and no header), fall back to default_provider.
+
+# 範例：把遠端 llama.cpp 設為主要後端
+# default_provider: "llamacpp"
+
